@@ -10,6 +10,9 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
 import os
 from pathlib import Path
+import json
+from typing import Optional
+from pydantic import BaseModel, EmailStr
 
 app = FastAPI(title="Mergington High School API",
               description="API for viewing and signing up for extracurricular activities")
@@ -76,6 +79,84 @@ activities = {
         "participants": ["charlotte@mergington.edu", "henry@mergington.edu"]
     }
 }
+
+# --- User management (persistent JSON storage) ---------------------------------
+USERS_FILE = os.path.join(current_dir, "users.json")
+
+class User(BaseModel):
+    email: EmailStr
+    name: Optional[str] = None
+    role: str = "student"  # one of: student, teacher, admin, staff
+
+ALLOWED_ROLES = {"student", "teacher", "admin", "staff"}
+
+
+def load_users():
+    if not os.path.exists(USERS_FILE):
+        return {}
+    try:
+        with open(USERS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save_users(users: dict):
+    with open(USERS_FILE, "w", encoding="utf-8") as f:
+        json.dump(users, f, indent=2)
+
+
+@app.get("/users")
+def get_users():
+    users = load_users()
+    return list(users.values())
+
+
+@app.get("/users/{email}")
+def get_user(email: str):
+    users = load_users()
+    if email not in users:
+        raise HTTPException(status_code=404, detail="User not found")
+    return users[email]
+
+
+@app.post("/users")
+def create_user(user: User):
+    if user.role not in ALLOWED_ROLES:
+        raise HTTPException(status_code=400, detail="Invalid role")
+    users = load_users()
+    if user.email in users:
+        raise HTTPException(status_code=400, detail="User already exists")
+    users[user.email] = user.dict()
+    save_users(users)
+    return users[user.email]
+
+
+@app.put("/users/{email}")
+def update_user(email: str, user: User):
+    users = load_users()
+    if email not in users:
+        raise HTTPException(status_code=404, detail="User not found")
+    if user.role not in ALLOWED_ROLES:
+        raise HTTPException(status_code=400, detail="Invalid role")
+    # Allow updating email only if it's the same as path param
+    if user.email != email:
+        # Prevent changing the user's primary key via this endpoint
+        raise HTTPException(status_code=400, detail="Email cannot be changed")
+    users[email] = user.dict()
+    save_users(users)
+    return users[email]
+
+
+@app.delete("/users/{email}")
+def delete_user(email: str):
+    users = load_users()
+    if email not in users:
+        raise HTTPException(status_code=404, detail="User not found")
+    deleted = users.pop(email)
+    save_users(users)
+    return {"message": f"Deleted user {email}", "user": deleted}
+
 
 
 @app.get("/")
